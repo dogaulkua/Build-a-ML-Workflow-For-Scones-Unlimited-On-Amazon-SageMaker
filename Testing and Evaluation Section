@@ -1,0 +1,204 @@
+# Testing and Evaluation Section - Complete Code
+
+import random
+import boto3
+import json
+from sagemaker.s3 import S3Downloader
+import matplotlib.pyplot as plt
+import jsonlines
+import os
+from datetime import datetime
+import pandas as pd
+
+# Test case generator function
+def generate_test_case():
+    # Setup s3 in boto3
+    s3 = boto3.resource('s3')
+
+    # Randomly pick from test folders in our bucket
+    objects = s3.Bucket(bucket).objects.filter(Prefix="test")
+
+    # Grab any random object key from that folder!
+    obj = random.choice([x.key for x in objects])
+
+    return json.dumps({
+        "image_data": "",
+        "s3_bucket": bucket,
+        "s3_key": obj
+    })
+
+# Generate multiple test cases
+print("Sample test cases for Step Function execution:")
+for i in range(5):
+    print(f"Test case {i+1}:")
+    print(generate_test_case())
+    print()
+
+# Download captured data from Model Monitor
+# Replace with your actual data capture path - it will be datetime-aware
+# Example: s3://your-bucket/data_capture/sagemaker-model-endpoint/2024/01/15/12/
+data_path = f"s3://{bucket}/data_capture/"
+
+# Download the captured data
+S3Downloader.download(data_path, "captured_data")
+
+# Install jsonlines if not already installed
+try:
+    import jsonlines
+except ImportError:
+    import subprocess
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "jsonlines"])
+    import jsonlines
+
+# Extract data from JSONLines files
+file_handles = os.listdir("./captured_data")
+
+# Filter only .jsonl files
+jsonl_files = [f for f in file_handles if f.endswith('.jsonl')]
+
+# Dump all the data into an array
+json_data = []
+for jsonl_file in jsonl_files:
+    try:
+        with jsonlines.open(f"./captured_data/{jsonl_file}") as f:
+            for line in f:
+                json_data.append(line)
+    except Exception as e:
+        print(f"Error reading {jsonl_file}: {e}")
+        continue
+
+print(f"Loaded {len(json_data)} inference records")
+
+# Define data extraction function
+def simple_getter(obj):
+    try:
+        inferences = obj["captureData"]["endpointOutput"]["data"]
+        timestamp = obj["eventMetadata"]["inferenceTime"]
+        return json.loads(inferences), timestamp
+    except KeyError as e:
+        print(f"Key error: {e}")
+        return None, None
+
+# Test the getter function
+if json_data:
+    sample_inference, sample_timestamp = simple_getter(json_data[0])
+    print(f"Sample inference: {sample_inference}")
+    print(f"Sample timestamp: {sample_timestamp}")
+
+# Create visualization 1: Confidence scores over time
+x = []
+y = []
+valid_data = []
+
+for obj in json_data:
+    inference, timestamp = simple_getter(obj)
+    if inference is not None and timestamp is not None:
+        confidence_score = max(inference)
+        y.append(confidence_score)
+        x.append(timestamp)
+        valid_data.append({
+            'timestamp': timestamp,
+            'confidence': confidence_score,
+            'inference': inference
+        })
+
+# Plot confidence over time
+plt.figure(figsize=(12, 6))
+plt.scatter(x, y, c=['r' if k < 0.94 else 'b' for k in y], alpha=0.7)
+plt.axhline(y=0.94, color='g', linestyle='--', label='Confidence Threshold (0.94)')
+plt.ylim(bottom=0.88)
+plt.ylabel("Confidence Score")
+plt.xlabel("Inference Time")
+plt.title("Model Inference Confidence Over Time")
+plt.legend()
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.show()
+
+# Create visualization 2: Confidence distribution histogram
+plt.figure(figsize=(10, 6))
+plt.hist(y, bins=20, alpha=0.7, color='skyblue', edgecolor='black')
+plt.axvline(x=0.94, color='r', linestyle='--', label='Threshold (0.94)')
+plt.xlabel('Confidence Score')
+plt.ylabel('Frequency')
+plt.title('Distribution of Model Confidence Scores')
+plt.legend()
+plt.grid(axis='y', alpha=0.3)
+plt.show()
+
+# Create visualization 3: Classification results breakdown
+if valid_data:
+    df = pd.DataFrame(valid_data)
+    
+    # Assuming binary classification: bicycle (class 0) vs motorcycle (class 1)
+    bicycle_predictions = []
+    motorcycle_predictions = []
+    
+    for record in valid_data:
+        inference = record['inference']
+        if len(inference) >= 2:
+            bicycle_predictions.append(inference[0])
+            motorcycle_predictions.append(inference[1])
+    
+    # Create side-by-side comparison
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+    
+    # Bicycle confidence scores
+    ax1.hist(bicycle_predictions, bins=15, alpha=0.7, color='blue', edgecolor='black')
+    ax1.set_title('Bicycle Classification Confidence')
+    ax1.set_xlabel('Confidence Score')
+    ax1.set_ylabel('Frequency')
+    ax1.grid(axis='y', alpha=0.3)
+    
+    # Motorcycle confidence scores
+    ax2.hist(motorcycle_predictions, bins=15, alpha=0.7, color='red', edgecolor='black')
+    ax2.set_title('Motorcycle Classification Confidence')
+    ax2.set_xlabel('Confidence Score')
+    ax2.set_ylabel('Frequency')
+    ax2.grid(axis='y', alpha=0.3)
+    
+    plt.tight_layout()
+    plt.show()
+
+# Performance metrics
+if y:
+    high_confidence_count = sum(1 for conf in y if conf >= 0.94)
+    total_predictions = len(y)
+    
+    print(f"\n=== Model Monitor Analysis ===")
+    print(f"Total predictions analyzed: {total_predictions}")
+    print(f"High confidence predictions (>= 0.94): {high_confidence_count}")
+    print(f"High confidence rate: {high_confidence_count/total_predictions*100:.2f}%")
+    print(f"Average confidence score: {sum(y)/len(y):.4f}")
+    print(f"Min confidence score: {min(y):.4f}")
+    print(f"Max confidence score: {max(y):.4f}")
+
+# Additional monitoring visualization - Time series with trend
+if len(x) > 1:
+    plt.figure(figsize=(14, 8))
+    
+    # Convert timestamps to datetime for better plotting
+    timestamps = [datetime.fromisoformat(ts.replace('Z', '+00:00')) for ts in x[:10]]  # Limit for clarity
+    confidences = y[:10]
+    
+    plt.plot(timestamps, confidences, 'bo-', alpha=0.7, linewidth=2, markersize=8)
+    plt.axhline(y=0.94, color='g', linestyle='--', linewidth=2, label='Production Threshold')
+    plt.fill_between(timestamps, confidences, 0.94, 
+                     where=[c >= 0.94 for c in confidences], 
+                     color='green', alpha=0.3, label='Above Threshold')
+    plt.fill_between(timestamps, confidences, 0.94, 
+                     where=[c < 0.94 for c in confidences], 
+                     color='red', alpha=0.3, label='Below Threshold')
+    
+    plt.ylabel("Confidence Score")
+    plt.xlabel("Time")
+    plt.title("Model Performance Monitoring - Recent Inferences")
+    plt.legend()
+    plt.xticks(rotation=45)
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+
+print("\n=== Testing and Evaluation Complete ===")
+print("Use the generated test cases above to execute your Step Function multiple times.")
+print("The visualizations above show your model's performance over time.")
