@@ -1,0 +1,60 @@
+{
+  "Comment": "Image Classification Workflow for Scones Unlimited",
+  "StartAt": "SerializeImageData",
+  "States": {
+    "SerializeImageData": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "Payload.$": "$",
+        "FunctionName": "arn:aws:lambda:us-east-1:ACCOUNT-ID:function:serializeImageData"
+      },
+      "OutputPath": "$.Payload",
+      "Next": "ClassifyImage",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 6,
+          "BackoffRate": 2
+        }
+      ]
+    },
+    "ClassifyImage": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "Payload.$": "$",
+        "FunctionName": "arn:aws:lambda:us-east-1:ACCOUNT-ID:function:classifyImage"
+      },
+      "OutputPath": "$.Payload",
+      "Next": "FilterLowConfidenceInferences",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 6,
+          "BackoffRate": 2
+        }
+      ]
+    },
+    "FilterLowConfidenceInferences": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "Payload.$": "$",
+        "FunctionName": "arn:aws:lambda:us-east-1:ACCOUNT-ID:function:filterLowConfidenceInferences"
+      },
+      "OutputPath": "$.Payload",
+      "End": true
+    }
+  }
+}
